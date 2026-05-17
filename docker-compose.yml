@@ -1,0 +1,53 @@
+# Brings up the full stack: mock pool, server, dashboard and one worker.
+# Usage: docker compose up --build
+#
+# Then open the dashboard at http://localhost:8080
+#
+# To mine on a REAL pool instead of the bundled mock, override the worker's
+# POOL_URL and WALLET_ADDRESS (see README.md).
+
+services:
+  mock-pool:
+    build: ./mock-pool
+    ports:
+      - "3333:3333"
+    restart: unless-stopped
+
+  server:
+    build: ./server
+    ports:
+      - "4000:4000"
+    environment:
+      - DB_PATH=/data/monitor.db
+    volumes:
+      - monitor-data:/data
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        # The browser reaches the server via the host-published port.
+        VITE_SERVER_URL: http://localhost:4000
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  worker:
+    build: ./worker
+    environment:
+      - POOL_URL=mock-pool:3333
+      - SERVER_URL=http://server:4000
+      - WORKER_NAME=docker-worker-1
+      - WALLET_ADDRESS=demo-wallet
+      # Mining threads; 0 = one per CPU. Kept low so the demo stays gentle.
+      - THREADS=2
+    depends_on:
+      - server
+      - mock-pool
+    restart: unless-stopped
+
+volumes:
+  monitor-data:

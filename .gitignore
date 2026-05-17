@@ -1,0 +1,17 @@
+# Rust
+/worker/target
+
+# Node
+node_modules
+dist
+
+# Server runtime data (SQLite)
+/server/data
+*.db
+*.db-shm
+*.db-wal
+
+# Misc
+.DS_Store
+*.log
+.env
