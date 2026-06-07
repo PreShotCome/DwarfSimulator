@@ -32,6 +32,8 @@ interface HeroResponse {
   stats?: HeroStats;
   // herominers returns workers either as a keyed object or an array of rows.
   workers?: unknown;
+  /** Present (e.g. "Not found") when the pool has no record of the address. */
+  error?: string;
 }
 
 function num(value: unknown): number {
@@ -93,32 +95,13 @@ function parseWorkers(raw: unknown): Worker[] {
   });
 }
 
-async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
-  const address = (config.address ?? '').trim();
-  if (!address) {
-    return placeholderSnapshot(
-      'unconfigured',
-      'Add your Ergo payout address (starts with “9…”) to start monitoring.',
-    );
-  }
-  const apiBase = (config.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
+/** Cheap sanity check for a mainnet Ergo P2PK address (starts with 9, base58). */
+function looksLikeErgoAddress(addr: string): boolean {
+  return /^9[1-9A-HJ-NP-Za-km-z]{39,59}$/.test(addr);
+}
 
-  let data: HeroResponse;
-  try {
-    const res = await fetch(
-      `${apiBase}/stats_address?address=${encodeURIComponent(address)}&longpoll=false`,
-    );
-    if (!res.ok) {
-      return placeholderSnapshot('error', `Pool API returned ${res.status}.`);
-    }
-    data = (await res.json()) as HeroResponse;
-  } catch {
-    return placeholderSnapshot(
-      'error',
-      'Could not reach the pool API. If this is a CORS block, set an “API base” proxy in settings.',
-    );
-  }
-
+/** Fold a (possibly empty) herominers response into a live snapshot. */
+function toSnapshot(data: HeroResponse): SourceSnapshot {
   const stats = data.stats ?? {};
   const workers = parseWorkers(data.workers);
   const totalHashrate =
@@ -139,6 +122,48 @@ async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
     totalHashrate,
     generatedAt: Date.now(),
   };
+}
+
+async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
+  const address = (config.address ?? '').trim();
+  if (!address) {
+    return placeholderSnapshot(
+      'unconfigured',
+      'Add your Ergo payout address (starts with “9…”) to start monitoring.',
+    );
+  }
+  if (!looksLikeErgoAddress(address)) {
+    return placeholderSnapshot(
+      'unconfigured',
+      'That doesn’t look like a mainnet Ergo address (they start with “9”). Double-check it.',
+    );
+  }
+  const apiBase = (config.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
+
+  let data: HeroResponse;
+  try {
+    const res = await fetch(
+      `${apiBase}/stats_address?address=${encodeURIComponent(address)}&longpoll=false`,
+    );
+    if (!res.ok) {
+      return placeholderSnapshot('error', `Pool API returned ${res.status}.`);
+    }
+    data = (await res.json()) as HeroResponse;
+  } catch {
+    return placeholderSnapshot(
+      'error',
+      'Could not reach the pool API. If this is a CORS block, set an “API base” proxy in settings.',
+    );
+  }
+
+  // herominers returns {"error":"Not found"} for an address it has never seen.
+  // The address is well-formed, so this just means mining hasn't started yet:
+  // show a populated, zeroed "waiting for first shares" view rather than an error.
+  if (data.error) {
+    return toSnapshot({});
+  }
+
+  return toSnapshot(data);
 }
 
 export const ergoSource: Source = {
