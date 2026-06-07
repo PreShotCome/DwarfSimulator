@@ -5,7 +5,7 @@ import {
   type SourceSnapshot,
   type Worker,
 } from './types';
-import { formatCoin, formatHashrate } from '../format';
+import { formatCoin, formatHashrate, formatNumber } from '../format';
 
 /**
  * Ergo source — LIVE. Reads the public herominers pool API by wallet address.
@@ -13,25 +13,40 @@ import { formatCoin, formatHashrate } from '../format';
  * public, so this works straight from the browser with just the user's `9…`
  * address. If the pool blocks cross-origin requests in your environment, point
  * `apiBase` at a proxy that forwards to ergo.herominers.com.
+ *
+ * Field names below were verified against a live herominers response: workers
+ * are objects with `shares_good` / `shares_invalid` / `shares_stale`, and the
+ * current hash rate is `hashrate` (with `hashrate_1h` as a smoothed average).
  */
 
 const DEFAULT_API_BASE = 'https://ergo.herominers.com/api';
-const ERG_DECIMALS = 1e9; // 1 ERG = 1e9 nanoERG
-/** A herominers worker is considered offline if it hasn't shared in 10 min. */
+const ERG_DECIMALS = 1e9; // 1 ERG = 1e9 nanoERG (confirmed: config.coinUnits)
+/** A worker is considered offline if it hasn't shared in 10 min. */
 const OFFLINE_AFTER_MS = 10 * 60 * 1000;
 
 interface HeroStats {
   hashrate?: number;
+  hashrate_1h?: number;
   balance?: string | number;
-  paid?: string | number;
-  hashes?: string | number;
-  lastShare?: string | number;
+  shares_good?: number;
+  shares_invalid?: number;
+  shares_stale?: number;
+}
+
+interface HeroWorker {
+  name?: string;
+  hashrate?: number;
+  hashrate_1h?: number;
+  lastShare?: number | string;
+  shares_good?: number;
+  shares_invalid?: number;
+  shares_stale?: number;
+  agent?: string;
 }
 
 interface HeroResponse {
   stats?: HeroStats;
-  // herominers returns workers either as a keyed object or an array of rows.
-  workers?: unknown;
+  workers?: HeroWorker[];
   /** Present (e.g. "Not found") when the pool has no record of the address. */
   error?: string;
 }
@@ -48,50 +63,28 @@ function toMs(ts: unknown): number {
   return n < 1e12 ? n * 1000 : n;
 }
 
-/** Normalize the many shapes herominers can use for the workers field. */
-function parseWorkers(raw: unknown): Worker[] {
-  const rows: Array<{ name: string; values: unknown[] }> = [];
-
-  if (Array.isArray(raw)) {
-    // Array of [name, hashrate, lastShare, validShares, staleShares, ...].
-    for (const row of raw) {
-      if (Array.isArray(row)) {
-        rows.push({ name: String(row[0] ?? 'worker'), values: row });
-      } else if (row && typeof row === 'object') {
-        const o = row as Record<string, unknown>;
-        rows.push({
-          name: String(o.name ?? o.worker ?? o.rigId ?? 'worker'),
-          values: [o.name, o.hashrate, o.lastShare, o.validShares, o.invalidShares],
-        });
-      }
-    }
-  } else if (raw && typeof raw === 'object') {
-    // Keyed object: { "rig1": { hashrate, lastShare, ... }, ... }.
-    for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-      const o = (value ?? {}) as Record<string, unknown>;
-      rows.push({
-        name,
-        values: [name, o.hashrate ?? o.hashRate, o.lastShare ?? o.lastBeat, o.validShares ?? o.shares, o.invalidShares ?? o.staleShares],
-      });
-    }
-  }
-
-  return rows.map((r, i) => {
-    const hashrate = num(r.values[1]);
-    const lastSeen = toMs(r.values[2]) || Date.now();
-    const accepted = num(r.values[3]);
-    const rejected = num(r.values[4]);
+function parseWorkers(raw: HeroWorker[] | undefined): Worker[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((w, i) => {
+    const hashrate = num(w.hashrate);
+    const lastSeen = toMs(w.lastShare) || Date.now();
+    const accepted = num(w.shares_good);
+    const rejected = num(w.shares_invalid) + num(w.shares_stale);
     const online = Date.now() - lastSeen < OFFLINE_AFTER_MS;
-    const worker: Worker = {
-      id: `ergo:${r.name || i}`,
-      name: r.name || `worker ${i + 1}`,
+    const avg1h = num(w.hashrate_1h);
+    return {
+      id: `ergo:${w.name || i}`,
+      name: w.name || `worker ${i + 1}`,
       status: online ? 'online' : 'offline',
       hashrate,
       accepted,
       rejected,
       lastSeen,
+      extra: [
+        ...(avg1h ? [{ label: '1h avg', value: formatHashrate(avg1h) }] : []),
+        ...(w.agent ? [{ label: 'Miner', value: w.agent }] : []),
+      ],
     };
-    return worker;
   });
 }
 
@@ -107,7 +100,8 @@ function toSnapshot(data: HeroResponse): SourceSnapshot {
   const totalHashrate =
     num(stats.hashrate) || workers.reduce((sum, w) => sum + w.hashrate, 0);
   const balance = num(stats.balance) / ERG_DECIMALS;
-  const paid = num(stats.paid) / ERG_DECIMALS;
+  const validShares =
+    num(stats.shares_good) || workers.reduce((sum, w) => sum + w.accepted, 0);
   const onlineCount = workers.filter((w) => w.status === 'online').length;
 
   return {
@@ -115,7 +109,7 @@ function toSnapshot(data: HeroResponse): SourceSnapshot {
     stats: [
       { label: 'Pool hashrate', value: formatHashrate(totalHashrate), accent: true },
       { label: 'Unpaid balance', value: formatCoin(balance, 'ERG') },
-      { label: 'Total paid', value: formatCoin(paid, 'ERG') },
+      { label: 'Valid shares', value: formatNumber(validShares) },
       { label: 'Workers online', value: `${onlineCount} / ${workers.length}` },
     ],
     workers,
