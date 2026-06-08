@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { buildSnapshot, readCreds } from './nicehash';
 import { buildLolminerSnapshot, LOLMINER_API_URL } from './lolminer';
+import { buildExcavatorSnapshot } from './excavator';
 
 const app = express();
 app.use(cors());
@@ -51,6 +52,29 @@ app.get('/api/lolminer/snapshot', async (_req, res) => {
       message: `Could not reach lolMiner's API at ${LOLMINER_API_URL}. Start lolMiner with --apiport 4444.`,
     });
   }
+});
+
+/**
+ * Unified live-rig snapshot: auto-detects whichever miner is running — lolMiner
+ * (Ergo) first, then NiceHash's Excavator. 501 if neither is reachable.
+ */
+app.get('/api/rig/snapshot', async (_req, res) => {
+  try {
+    res.json(await buildLolminerSnapshot());
+    return;
+  } catch {
+    /* lolMiner not running — try Excavator (NiceHash). */
+  }
+  try {
+    res.json(await buildExcavatorSnapshot());
+    return;
+  } catch {
+    /* Excavator not running either. */
+  }
+  res.status(501).json({
+    message:
+      'No local miner detected. Start lolMiner (Ergo, --apiport 4444) or NiceHash QuickMiner (Excavator).',
+  });
 });
 
 app.listen(PORT, () => {

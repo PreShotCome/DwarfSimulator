@@ -6,11 +6,11 @@ import {
 } from './types';
 
 /**
- * "Rig (live)" source — real-time stats straight from lolMiner's local API,
- * read through the server proxy (which runs on the rig and reaches lolMiner over
- * localhost). This shows your *true* hashrate, temp and watts, instead of the
- * pool's delayed share-based estimate. Reading it uses no GPU, so it's safe to
- * watch from your phone while the rig mines undisturbed.
+ * "Rig (live)" source — real-time hardware stats straight from the local miner,
+ * read through the server proxy (which runs on the rig over localhost). The
+ * proxy auto-detects whichever miner is running: lolMiner (Ergo) or NiceHash's
+ * Excavator. Shows your *true* hashrate, temp and watts, not the pool's delayed
+ * estimate. Reading it uses no GPU, so it's safe to watch from your phone.
  */
 
 // Default the proxy to whatever host is serving this page: 'localhost' on the
@@ -23,11 +23,11 @@ const DEFAULT_PROXY =
 async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
   const proxyUrl = (config.proxyUrl || DEFAULT_PROXY).trim().replace(/\/$/, '');
   try {
-    const res = await fetch(`${proxyUrl}/api/lolminer/snapshot`);
+    const res = await fetch(`${proxyUrl}/api/rig/snapshot`);
     if (res.status === 501) {
       return placeholderSnapshot(
         'unconfigured',
-        "lolMiner's API isn't reachable. Launch lolMiner with --apiport 4444, and make sure the proxy (rig-monitor/server) is running.",
+        "No local miner detected. Start a miner (lolMiner with --apiport 4444, or NiceHash QuickMiner) and make sure the proxy is running.",
       );
     }
     if (!res.ok) {
@@ -49,7 +49,7 @@ export const lolminerSource: Source = {
   emoji: '🖥️',
   accent: '#3da5ff',
   coinUnit: '',
-  tagline: 'Real-time hashrate, temp & watts from lolMiner',
+  tagline: 'Real-time hardware — auto-detects lolMiner or NiceHash',
   configFields: [
     {
       key: 'proxyUrl',
