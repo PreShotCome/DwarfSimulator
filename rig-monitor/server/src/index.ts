@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { buildSnapshot, readCreds } from './nicehash';
+import { buildLolminerSnapshot, LOLMINER_API_URL } from './lolminer';
 
 const app = express();
 app.use(cors());
@@ -32,6 +33,22 @@ app.get('/api/nicehash/snapshot', async (_req, res) => {
   } catch (error) {
     res.status(502).json({
       message: error instanceof Error ? error.message : 'NiceHash request failed.',
+    });
+  }
+});
+
+/**
+ * Live local stats from lolMiner's HTTP API. Returns 501 (not an error) when
+ * lolMiner isn't reachable, so the dashboard can show a friendly "start
+ * lolMiner with --apiport" hint instead of an error.
+ */
+app.get('/api/lolminer/snapshot', async (_req, res) => {
+  try {
+    const snapshot = await buildLolminerSnapshot();
+    res.json(snapshot);
+  } catch {
+    res.status(501).json({
+      message: `Could not reach lolMiner's API at ${LOLMINER_API_URL}. Start lolMiner with --apiport 4444.`,
     });
   }
 });

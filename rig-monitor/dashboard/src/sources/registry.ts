@@ -1,13 +1,14 @@
 import type { Source } from './types';
 import { nicehashSource } from './nicehash';
 import { ergoSource } from './ergo';
+import { lolminerSource } from './lolminer';
 
 /**
  * Every miner the dashboard can show, in switcher order. NiceHash is first so
  * it is the default profile on first run. Add a new miner by writing one
  * adapter file and appending it here — nothing else needs to change.
  */
-export const SOURCES: Source[] = [nicehashSource, ergoSource];
+export const SOURCES: Source[] = [nicehashSource, ergoSource, lolminerSource];
 
 /** The id selected on first run (before the user picks one). */
 export const DEFAULT_SOURCE_ID = nicehashSource.id;
