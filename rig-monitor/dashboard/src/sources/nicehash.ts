@@ -22,10 +22,15 @@ import {
  *   4. set this source's "Proxy URL" to that address in dashboard settings.
  */
 
-const DEFAULT_PROXY = 'http://localhost:4100';
+// Default the proxy to whatever host serves this page: 'localhost' on the rig,
+// or the rig's LAN IP when the dashboard is opened from a phone.
+const DEFAULT_PROXY =
+  typeof location !== 'undefined'
+    ? `http://${location.hostname}:4100`
+    : 'http://localhost:4100';
 
 async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
-  const proxyUrl = (config.proxyUrl ?? '').trim().replace(/\/$/, '');
+  const proxyUrl = (config.proxyUrl || DEFAULT_PROXY).trim().replace(/\/$/, '');
   if (!proxyUrl) {
     return placeholderSnapshot(
       'unconfigured',
