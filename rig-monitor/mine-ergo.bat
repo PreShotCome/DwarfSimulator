@@ -3,15 +3,17 @@ REM ============================================================
 REM  Mine ERGO (lolMiner)  -  one-click launcher
 REM  Stops any other miner, ensures the monitor stack is up,
 REM  then starts lolMiner on Ergo.
+REM  Settings are loaded from rig-config.bat (gitignored).
 REM ============================================================
-
-REM ============ EDIT THESE ONCE ============
-set "LOLMINER_DIR=E:\lolMiner\lolMiner_v1.98_Win64\1.98"
-set "ERGO_ADDRESS=PASTE_YOUR_9_ADDRESS_HERE"
-set "WORKER=rig3060"
-set "POOL=ergo.herominers.com:1180"
-REM ========================================
 set "RIGMON=%~dp0"
+
+if not exist "%RIGMON%rig-config.bat" (
+  echo ERROR: rig-config.bat not found.
+  echo Copy rig-config.example.bat to rig-config.bat and edit your paths/address.
+  pause
+  exit /b
+)
+call "%RIGMON%rig-config.bat"
 
 echo == Mine Ergo (lolMiner) ==
 echo [1/3] Stopping any other miner...
@@ -27,7 +29,7 @@ call :ensure 5174 "rig-monitor dashboard" "%RIGMON%dashboard"
 echo [3/3] Starting lolMiner on Ergo...
 if not exist "%LOLMINER_DIR%\lolMiner.exe" (
   echo    ERROR: lolMiner.exe not found in "%LOLMINER_DIR%"
-  echo    Edit LOLMINER_DIR at the top of this file.
+  echo    Fix LOLMINER_DIR in rig-config.bat.
   pause
   exit /b
 )

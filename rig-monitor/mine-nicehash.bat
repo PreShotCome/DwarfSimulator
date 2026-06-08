@@ -3,14 +3,17 @@ REM ============================================================
 REM  Mine NICEHASH (QuickMiner / BTC)  -  one-click launcher
 REM  Stops the Ergo miner, ensures the monitor stack is up,
 REM  then launches NiceHash QuickMiner.
+REM  Settings are loaded from rig-config.bat (gitignored).
 REM ============================================================
-
-REM ============ EDIT THIS ONCE ============
-REM  Find it: right-click the QuickMiner Start Menu shortcut
-REM  -> Open file location -> note the .exe name/path.
-set "QUICKMINER_EXE=%LOCALAPPDATA%\Programs\NiceHash QuickMiner\nhqm.exe"
-REM =======================================
 set "RIGMON=%~dp0"
+
+if not exist "%RIGMON%rig-config.bat" (
+  echo ERROR: rig-config.bat not found.
+  echo Copy rig-config.example.bat to rig-config.bat and edit your paths/address.
+  pause
+  exit /b
+)
+call "%RIGMON%rig-config.bat"
 
 echo == Mine NiceHash (QuickMiner / BTC) ==
 echo [1/3] Stopping Ergo miner (lolMiner)...
@@ -26,7 +29,7 @@ if exist "%QUICKMINER_EXE%" (
 ) else (
   echo    Could not find QuickMiner at:
   echo    "%QUICKMINER_EXE%"
-  echo    Edit QUICKMINER_EXE at the top of this file.
+  echo    Fix QUICKMINER_EXE in rig-config.bat.
 )
 
 echo.
