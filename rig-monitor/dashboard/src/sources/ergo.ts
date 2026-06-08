@@ -93,8 +93,28 @@ function looksLikeErgoAddress(addr: string): boolean {
   return /^9[1-9A-HJ-NP-Za-km-z]{39,59}$/.test(addr);
 }
 
+const DEFAULT_PAYOUT_THRESHOLD = 0.5; // ERG (herominers Ergo minimum payout)
+let cachedThresholdErg: number | null = null;
+
+/** One-time, cached fetch of the pool's minimum payout threshold. */
+async function getPayoutThreshold(apiBase: string): Promise<number> {
+  if (cachedThresholdErg != null) return cachedThresholdErg;
+  try {
+    const res = await fetch(`${apiBase}/stats`);
+    const d = (await res.json()) as {
+      config?: { minPaymentThreshold?: number | string; coinUnits?: number | string };
+    };
+    const units = num(d.config?.coinUnits) || ERG_DECIMALS;
+    const thr = num(d.config?.minPaymentThreshold) / units;
+    cachedThresholdErg = thr > 0 ? thr : DEFAULT_PAYOUT_THRESHOLD;
+  } catch {
+    cachedThresholdErg = DEFAULT_PAYOUT_THRESHOLD;
+  }
+  return cachedThresholdErg;
+}
+
 /** Fold a (possibly empty) herominers response into a live snapshot. */
-function toSnapshot(data: HeroResponse): SourceSnapshot {
+function toSnapshot(data: HeroResponse, thresholdErg: number): SourceSnapshot {
   const stats = data.stats ?? {};
   const workers = parseWorkers(data.workers);
   const totalHashrate =
@@ -103,12 +123,17 @@ function toSnapshot(data: HeroResponse): SourceSnapshot {
   const validShares =
     num(stats.shares_good) || workers.reduce((sum, w) => sum + w.accepted, 0);
   const onlineCount = workers.filter((w) => w.status === 'online').length;
+  const progressPct = thresholdErg > 0 ? (balance / thresholdErg) * 100 : 0;
 
   return {
     status: 'live',
     stats: [
       { label: 'Pool hashrate', value: formatHashrate(totalHashrate), accent: true },
       { label: 'Unpaid balance', value: formatCoin(balance, 'ERG') },
+      {
+        label: 'Payout progress',
+        value: `${progressPct.toFixed(1)}% of ${thresholdErg} ERG`,
+      },
       { label: 'Valid shares', value: formatNumber(validShares) },
       { label: 'Workers online', value: `${onlineCount} / ${workers.length}` },
     ],
@@ -133,6 +158,7 @@ async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
     );
   }
   const apiBase = (config.apiBase || DEFAULT_API_BASE).replace(/\/$/, '');
+  const thresholdErg = await getPayoutThreshold(apiBase);
 
   let data: HeroResponse;
   try {
@@ -154,10 +180,10 @@ async function fetchSnapshot(config: SourceConfig): Promise<SourceSnapshot> {
   // The address is well-formed, so this just means mining hasn't started yet:
   // show a populated, zeroed "waiting for first shares" view rather than an error.
   if (data.error) {
-    return toSnapshot({});
+    return toSnapshot({}, thresholdErg);
   }
 
-  return toSnapshot(data);
+  return toSnapshot(data, thresholdErg);
 }
 
 export const ergoSource: Source = {
