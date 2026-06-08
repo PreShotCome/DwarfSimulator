@@ -2,10 +2,13 @@ import type { Snapshot, Worker } from './nicehash';
 
 /**
  * Reads lolMiner's local HTTP API (enabled with `--apiport 4444`) and folds it
- * into the same normalized Snapshot the dashboard renders. This runs on the rig,
- * so it reaches lolMiner over localhost with no CORS issues and uses no GPU —
- * it's just JSON. Field names are read defensively because lolMiner's API shape
- * has shifted across versions; missing fields are simply omitted.
+ * into the same normalized Snapshot the dashboard renders. Runs on the rig, so
+ * it reaches lolMiner over localhost with no CORS and uses no GPU — it's JSON.
+ *
+ * Field layout verified against lolMiner 1.98: hardware stats (Power, CCLK,
+ * MCLK, Core_Temp, Fan_Speed) live in `Workers[]`, while mining stats live in
+ * `Algorithms[]` — Total_Performance + per-GPU `Worker_Performance[]`, scaled to
+ * H/s by `Performance_Factor` (e.g. 1e6 for "Mh/s").
  */
 
 const LOLMINER_API = process.env.LOLMINER_API_URL ?? 'http://127.0.0.1:4444';
@@ -14,23 +17,6 @@ export const LOLMINER_API_URL = LOLMINER_API;
 function num(v: unknown): number {
   const n = typeof v === 'string' ? Number(v) : (v as number);
   return Number.isFinite(n) ? n : 0;
-}
-
-/** First present numeric field among candidate keys (handles version drift). */
-function pick(obj: Record<string, unknown>, keys: string[]): number | null {
-  for (const k of keys) {
-    if (obj[k] != null && Number.isFinite(num(obj[k]))) return num(obj[k]);
-  }
-  return null;
-}
-
-/** lolMiner reports speed in its own unit (e.g. "mh/s"); convert to H/s. */
-function unitToHs(value: number, unit?: string): number {
-  const u = (unit ?? 'mh/s').toLowerCase();
-  if (u.startsWith('g')) return value * 1e9;
-  if (u.startsWith('m')) return value * 1e6;
-  if (u.startsWith('k')) return value * 1e3;
-  return value;
 }
 
 function fmtHashrate(hs: number): string {
@@ -44,62 +30,72 @@ function fmtHashrate(hs: number): string {
   return `${v.toFixed(2)} ${units[u]}`;
 }
 
+interface LolAlgorithm {
+  Performance_Factor?: number;
+  Total_Performance?: number;
+  Total_Accepted?: number;
+  Total_Rejected?: number;
+  Total_Stales?: number;
+  Worker_Performance?: number[];
+  Worker_Accepted?: number[];
+  Worker_Rejected?: number[];
+  Worker_Stales?: number[];
+}
+
+interface LolHwWorker {
+  Index?: number;
+  Name?: string;
+  Power?: number;
+  CCLK?: number;
+  MCLK?: number;
+  Core_Temp?: number;
+  Mem_Temp?: number;
+  Fan_Speed?: number;
+}
+
 interface LolResponse {
-  Mining?: {
-    Performance_Unit?: string;
-    Total_Performance?: number;
-    Total_Accepted?: number;
-    Total_Rejected?: number;
-  };
-  Workers?: Array<Record<string, unknown>>;
-  Session?: { Accepted?: number };
+  Workers?: LolHwWorker[];
+  Algorithms?: LolAlgorithm[];
 }
 
 export async function buildLolminerSnapshot(): Promise<Snapshot> {
   const res = await fetch(LOLMINER_API);
   if (!res.ok) throw new Error(`lolMiner API → ${res.status}`);
   const data = (await res.json()) as LolResponse;
-  const unit = data.Mining?.Performance_Unit;
 
-  const workers: Worker[] = (data.Workers ?? []).map((w, i) => {
-    const hashrate = unitToHs(pick(w, ['Performance']) ?? 0, unit);
-    const temp = pick(w, ['Temp', 'Temperature', 'GPU_Temp']);
-    const power = pick(w, ['Power', 'Juice', 'Watt']);
-    const fan = pick(w, ['Fan_Speed', 'Fan', 'Fan_Percent']);
-    const core = pick(w, ['Core_Clock', 'CCLK', 'Core_Frequency']);
-    const mem = pick(w, ['Mem_Clock', 'MCLK', 'Memory_Frequency']);
+  // Use the primary algorithm (single-algo mining; first entry if dual).
+  const algo = data.Algorithms?.[0] ?? {};
+  const factor = num(algo.Performance_Factor) || 1e6;
+  const hw = data.Workers ?? [];
+
+  const workers: Worker[] = hw.map((w, i) => {
+    const hashrate = num(algo.Worker_Performance?.[i]) * factor;
+    const accepted = num(algo.Worker_Accepted?.[i]);
+    const rejected = num(algo.Worker_Rejected?.[i]) + num(algo.Worker_Stales?.[i]);
     const extra: Array<{ label: string; value: string }> = [];
-    if (temp != null) extra.push({ label: 'GPU temp', value: `${temp}°C` });
-    if (power != null) extra.push({ label: 'Power', value: `${power.toFixed(0)} W` });
-    if (fan != null) extra.push({ label: 'Fan', value: `${fan}%` });
-    if (core != null) extra.push({ label: 'Core clock', value: `${core} MHz` });
-    if (mem != null) extra.push({ label: 'Mem clock', value: `${mem} MHz` });
-    const nameVal = w.Name;
+    if (num(w.Core_Temp)) extra.push({ label: 'GPU temp', value: `${num(w.Core_Temp)}°C` });
+    if (num(w.Mem_Temp)) extra.push({ label: 'Mem temp', value: `${num(w.Mem_Temp)}°C` });
+    if (num(w.Power)) extra.push({ label: 'Power', value: `${num(w.Power).toFixed(0)} W` });
+    if (num(w.Fan_Speed)) extra.push({ label: 'Fan', value: `${num(w.Fan_Speed)}%` });
+    if (num(w.CCLK)) extra.push({ label: 'Core clock', value: `${num(w.CCLK)} MHz` });
+    if (num(w.MCLK)) extra.push({ label: 'Mem clock', value: `${num(w.MCLK)} MHz` });
     return {
-      id: `lolminer:${pick(w, ['Index']) ?? i}`,
-      name: typeof nameVal === 'string' && nameVal ? nameVal : `GPU ${i}`,
+      id: `lolminer:${num(w.Index) || i}`,
+      name: w.Name || `GPU ${i}`,
       status: hashrate > 0 ? 'online' : 'offline',
       hashrate,
-      accepted: pick(w, ['Accepted']) ?? 0,
-      rejected: pick(w, ['Rejected']) ?? 0,
+      accepted,
+      rejected,
       lastSeen: Date.now(),
       extra,
     };
   });
 
   const totalHashrate =
-    unitToHs(num(data.Mining?.Total_Performance), unit) ||
-    workers.reduce((s, w) => s + w.hashrate, 0);
-  const totalPower = (data.Workers ?? []).reduce(
-    (s, w) => s + (pick(w, ['Power', 'Juice', 'Watt']) ?? 0),
-    0,
-  );
-  const accepted =
-    num(data.Mining?.Total_Accepted) ||
-    num(data.Session?.Accepted) ||
-    workers.reduce((s, w) => s + w.accepted, 0);
-  const rejected =
-    num(data.Mining?.Total_Rejected) || workers.reduce((s, w) => s + w.rejected, 0);
+    num(algo.Total_Performance) * factor || workers.reduce((s, w) => s + w.hashrate, 0);
+  const totalPower = hw.reduce((s, w) => s + num(w.Power), 0);
+  const accepted = num(algo.Total_Accepted);
+  const rejected = num(algo.Total_Rejected) + num(algo.Total_Stales);
   const effMhW = totalPower > 0 ? totalHashrate / 1e6 / totalPower : 0;
 
   const stats = [
